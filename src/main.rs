@@ -1,12 +1,14 @@
-use std::{env, fs};
+use std::collections::VecDeque;
+use std::env;
 use std::fs::File;
 use std::io;
 use std::io::BufRead;
-use std::process::{exit, ExitCode};
+use std::process::ExitCode;
+
 use cccut::{Cutter, Parameter};
 
 fn main() -> ExitCode {
-    let mut args = env::args();
+    let mut args = env::args().skip(1).collect();
     let parameters = match parse_parameters(&mut args) {
         Ok(p) => p,
         Err(err) => {
@@ -33,7 +35,7 @@ fn main() -> ExitCode {
 
     for reader in readers {
         let output = cutter.cut(reader);
-        for line in output{
+        for line in output {
             println!("{line}");
         }
     }
@@ -41,13 +43,32 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn parse_parameters(args: &mut env::Args) -> Result<Vec<Parameter>, String> {
+fn parse_parameters(mut args: &mut VecDeque<String>) -> Result<Vec<Parameter>, String>{
+
     let mut parameters = Vec::new();
-    for arg in args.take_while(|arg| arg.starts_with('-')) {
-        match Parameter::try_from(arg.as_str()) {
+
+    while args.front().is_some() && args.front().as_ref().unwrap().starts_with("-"){
+        let parameter = args.pop_front().unwrap();
+
+        match Parameter::try_from(parameter.as_str()) {
             Ok(param) => parameters.push(param),
             Err(err) => { return Err(err); }
         }
     }
+
     Ok(parameters)
 }
+
+// fn parse_parameters<I>(mut args: I) -> Result<Vec<Parameter>, String>
+//     where I: Iterator<Item=String> + fmt::Debug {
+//     let mut parameters = Vec::new();
+//
+//     let mut iter = args.take_while(|arg| arg.starts_with('-'));
+//     for arg in iter {
+//         match Parameter::try_from(arg.as_str()) {
+//             Ok(param) => parameters.push(param),
+//             Err(err) => { return Err(err); }
+//         }
+//     }
+//     Ok(parameters)
+// }

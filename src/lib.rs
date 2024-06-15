@@ -2,7 +2,7 @@ use std::any::Any;
 use std::io::{BufRead, BufReader};
 
 pub enum Parameter {
-    Fields(u32)
+    Fields(usize)
 }
 
 impl TryFrom<&str> for Parameter {
@@ -26,16 +26,28 @@ impl TryFrom<&str> for Parameter {
 }
 
 pub struct Cutter {
-    parameters: Vec<Parameter>,
+    fields: Option<usize>,
+    separator: String,
 }
 
 impl Cutter {
     pub fn new(parameters: Vec<Parameter>) -> Self {
-        Self { parameters }
+        let mut separator = String::from("\t");
+        let mut fields = None;
+        for parameter in parameters {
+            match parameter {
+                Parameter::Fields(i) => fields = Some(i),
+            }
+        }
+        Self { separator, fields }
     }
 
-    pub fn cut(&self, reader: impl BufRead) -> Vec<String> {
-
-        vec![]
+    pub fn cut(&self, mut reader: impl BufRead) -> Vec<String> {
+        let mut result = Vec::new();
+        for line in reader.lines() {
+            let remainder = line.unwrap().split(&self.separator).skip(self.fields.unwrap() - 1).next().unwrap().to_string();
+            result.push(remainder);
+        }
+        result
     }
 }
