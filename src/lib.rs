@@ -1,6 +1,8 @@
 use std::any::Any;
 use std::io::{BufRead, BufReader};
 
+pub mod flags;
+
 pub enum Parameter {
     Fields(usize)
 }
@@ -20,6 +22,9 @@ impl TryFrom<&str> for Parameter {
                 };
                 Ok(Parameter::Fields(pos))
             }
+            // ("-d", n) => {
+            //
+            // },
             _ => Err(format!("Unknown parameter {value}"))
         };
     }
@@ -27,7 +32,7 @@ impl TryFrom<&str> for Parameter {
 
 pub struct Cutter {
     fields: Option<usize>,
-    separator: String,
+    delimiter: String,
 }
 
 impl Cutter {
@@ -39,13 +44,13 @@ impl Cutter {
                 Parameter::Fields(i) => fields = Some(i),
             }
         }
-        Self { separator, fields }
+        Self { delimiter: separator, fields }
     }
 
     pub fn cut(&self, mut reader: impl BufRead) -> Vec<String> {
         let mut result = Vec::new();
         for line in reader.lines() {
-            let remainder = line.unwrap().split(&self.separator).skip(self.fields.unwrap() - 1).next().unwrap().to_string();
+            let remainder = line.unwrap().split(&self.delimiter).skip(self.fields.unwrap() - 1).next().unwrap().to_string();
             result.push(remainder);
         }
         result

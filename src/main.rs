@@ -8,7 +8,9 @@ use std::process::ExitCode;
 use cccut::{Cutter, Parameter};
 
 fn main() -> ExitCode {
+
     let mut args = env::args().skip(1).collect();
+
     let parameters = match parse_parameters(&mut args) {
         Ok(p) => p,
         Err(err) => {
@@ -58,17 +60,3 @@ fn parse_parameters(mut args: &mut VecDeque<String>) -> Result<Vec<Parameter>, S
 
     Ok(parameters)
 }
-
-// fn parse_parameters<I>(mut args: I) -> Result<Vec<Parameter>, String>
-//     where I: Iterator<Item=String> + fmt::Debug {
-//     let mut parameters = Vec::new();
-//
-//     let mut iter = args.take_while(|arg| arg.starts_with('-'));
-//     for arg in iter {
-//         match Parameter::try_from(arg.as_str()) {
-//             Ok(param) => parameters.push(param),
-//             Err(err) => { return Err(err); }
-//         }
-//     }
-//     Ok(parameters)
-// }
