@@ -71,16 +71,24 @@ mod tests {
 
     #[test]
     fn test_parse_i32() {
-        struct TestCase {
-            args: Vec<String>,
-            expected_flag: (&'static str, i32),
+        struct TestCase<V>
+        where V: str::FromStr {
+            args: Vec<&'static str>,
+            expected_flag: (&'static str, Box<dyn impl str::FromStr>),
             expects_err: bool,
         }
-        let tests = vec![TestCase {
-            args: vec![String::from("-i"), String::from("1")],
-            expected_flag: ("i", 1),
-            expects_err: false,
-        }];
+        let tests = vec![
+            TestCase {
+                args: vec!["-i", "1"],
+                expected_flag: ("i", Box::new(1)),
+                expects_err: false,
+            },
+            TestCase {
+                args: vec!["-b,", "true"],
+                expected_flag: ("b", Box::new(true)),
+                expects_err: false,
+            },
+        ];
 
         for test in tests {
             let mut flag_set = FlagSet::new();
@@ -88,7 +96,7 @@ mod tests {
             let mut value = 0;
             flag_set.register(test.expected_flag.0.to_string(), &mut value);
 
-            let result = flag_set.parse(test.args);
+            let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
             assert_eq!(test.expects_err, result.is_err());
 
             assert_eq!(test.expected_flag.1, value);
