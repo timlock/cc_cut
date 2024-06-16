@@ -1,29 +1,29 @@
 use std::collections::HashMap;
-use std::fmt;
-use std::fmt::format;
 use std::str;
 
 pub struct FlagSet<'a, V> {
     inner: HashMap<String, &'a mut V>,
 }
 
-impl<'a, V> FlagSet<'a, V>
-where
-    V: str::FromStr,
-{
-    pub fn new() -> Self {
+impl<'a, V> Default for FlagSet<'a, V> {
+    fn default() -> Self {
         Self {
-            inner: HashMap::new(),
+            inner: HashMap::new()
         }
     }
+}
 
-    pub fn register(&mut self, flag: String, value: &'a mut V) {
+impl<'a, V> FlagSet<'a, V>
+    where
+        V: str::FromStr,
+{
+    pub fn bind(&mut self, flag: String, value: &'a mut V) {
         self.inner.insert(flag, value);
     }
 
-    pub fn parse(&mut self, args: impl IntoIterator<Item = String>) -> Result<Vec<String>, String>
-    where
-        <V as std::str::FromStr>::Err: std::fmt::Debug,
+    pub fn parse(&mut self, args: impl IntoIterator<Item=String>) -> Result<Vec<String>, String>
+        where
+            <V as std::str::FromStr>::Err: std::fmt::Debug,
     {
         let mut remaining = Vec::new();
         let mut flag = None;
@@ -34,16 +34,18 @@ where
             } else {
                 if let Some(key) = flag {
                     if let Some(value) = self.inner.get_mut(&key) {
-                        **value = match V::from_str(&arg) {
+                        let parsed = match V::from_str(&arg) {
                             Ok(v) => v,
                             Err(err) => {
                                 return Err(format!(
                                     "Could not parse flag {key:?} value {arg}: {err:?}"
-                                ))
+                                ));
                             }
                         };
-                        // **value = arg;
+                        **value = parsed;
                     }
+                } else {
+                    remaining.push(arg);
                 }
                 flag = None;
             }
@@ -57,44 +59,85 @@ where
 mod tests {
     use super::*;
 
-    #[test]
-    fn it_works() {
-        let mut flagset = FlagSet::new();
-
-        let mut value = String::new();
-        flagset.register(String::from("key"), &mut value);
-
-        let args = vec!["-key".to_string(), "value".to_string()];
-        assert!(flagset.parse(args).is_ok());
-        assert_eq!(value.as_str(), "value");
+    struct TestCase<V>
+        where V: str::FromStr
+    {
+        args: Vec<&'static str>,
+        expected_flag: (&'static str, V),
+        expects_err: bool,
     }
 
     #[test]
-    fn test_parse_i32() {
-        struct TestCase<V>
-        where V: str::FromStr {
-            args: Vec<&'static str>,
-            expected_flag: (&'static str, Box<dyn impl str::FromStr>),
-            expects_err: bool,
-        }
+    fn test_parse_string() {
         let tests = vec![
             TestCase {
-                args: vec!["-i", "1"],
-                expected_flag: ("i", Box::new(1)),
+                args: vec!["-b", "string"],
+                expected_flag: ("b", String::from("string")),
                 expects_err: false,
             },
             TestCase {
-                args: vec!["-b,", "true"],
-                expected_flag: ("b", Box::new(true)),
+                args: vec!["-b", ""],
+                expected_flag: ("b", String::new()),
                 expects_err: false,
             },
         ];
 
         for test in tests {
-            let mut flag_set = FlagSet::new();
+            let mut flag_set = FlagSet::default();
+
+            let mut value = String::new();
+            flag_set.bind(test.expected_flag.0.to_string(), &mut value);
+
+            let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
+            assert_eq!(test.expects_err, result.is_err());
+
+            assert_eq!(test.expected_flag.1, value);
+        }
+    }
+
+    #[test]
+    fn test_parse_i32() {
+        let tests = vec![
+            TestCase {
+                args: vec!["-i", "1"],
+                expected_flag: ("i", 1),
+                expects_err: false,
+            },
+        ];
+
+        for test in tests {
+            let mut flag_set = FlagSet::default();
 
             let mut value = 0;
-            flag_set.register(test.expected_flag.0.to_string(), &mut value);
+            flag_set.bind(test.expected_flag.0.to_string(), &mut value);
+
+            let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
+            assert_eq!(test.expects_err, result.is_err());
+
+            assert_eq!(test.expected_flag.1, value);
+        }
+    }
+
+    #[test]
+    fn test_parse_bool() {
+        let tests = vec![
+            TestCase {
+                args: vec!["-b", "true"],
+                expected_flag: ("b", true),
+                expects_err: false,
+            },
+            TestCase {
+                args: vec!["-b", "fals"],
+                expected_flag: ("b", false),
+                expects_err: true,
+            },
+        ];
+
+        for test in tests {
+            let mut flag_set = FlagSet::default();
+
+            let mut value = false;
+            flag_set.bind(test.expected_flag.0.to_string(), &mut value);
 
             let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
             assert_eq!(test.expects_err, result.is_err());
