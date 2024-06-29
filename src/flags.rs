@@ -63,15 +63,29 @@ impl From<FlagPrefix> for &str {
     }
 }
 
+struct Flag<'a> {
+    inner: &'a mut dyn ParseFlag,
+    usage: &'static str,
+}
+
+impl<'a> Flag<'a> {
+    fn new(inner: &'a mut dyn ParseFlag, usage: &'static str) -> Self {
+        Self {
+            inner,
+            usage,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct FlagSet<'a> {
-    inner: HashMap<String, &'a mut dyn ParseFlag>,
+    inner: HashMap<String, Flag<'a>>,
 }
 
 impl<'a> FlagSet<'a>
 {
-    pub fn bind(&mut self, flag: String, value: &'a mut dyn ParseFlag) {
-        self.inner.insert(flag, value);
+    pub fn bind(&mut self, flag: String, value: &'a mut dyn ParseFlag, usage: &'static str) {
+        self.inner.insert(flag, Flag::new(value, usage));
     }
 
     pub fn parse(&mut self, args: impl IntoIterator<Item=String>) -> Result<Vec<String>, String>
@@ -93,7 +107,7 @@ impl<'a> FlagSet<'a>
                     let name = arg.strip_prefix(p).unwrap();
                     flag = Some(name.to_string());
                     if let Some(f) = self.inner.get_mut(name) {
-                        if f.try_activate().is_ok() {
+                        if f.inner.try_activate().is_ok() {
                             flag = None;
                         }
                     }
@@ -105,14 +119,14 @@ impl<'a> FlagSet<'a>
                     if name.len() == 1 {
                         flag = Some(name.to_string());
                         if let Some(f) = self.inner.get_mut(name) {
-                            if f.try_activate().is_ok() {
+                            if f.inner.try_activate().is_ok() {
                                 flag = None;
                             }
                         }
                     } else {
                         for f in name.chars() {
                             if let Some(f) = self.inner.get_mut(&f.to_string()) {
-                                if f.try_activate().is_ok() {
+                                if f.inner.try_activate().is_ok() {
                                     flag = None;
                                 }
                             }
@@ -123,7 +137,7 @@ impl<'a> FlagSet<'a>
                     match flag {
                         Some(flag) => {
                             if let Some(value) = self.inner.get_mut(&flag) {
-                                value
+                                value.inner
                                     .parse_from_string(&arg)
                                     .map_err(|err| format!("Could not parse flag {flag} err: {err}"))?;
                             }
@@ -138,6 +152,12 @@ impl<'a> FlagSet<'a>
         }
 
         Ok(remaining)
+    }
+
+    pub fn print_usage(&self) {
+        for (name, flag) in &self.inner {
+            println!("{}\n\t{}", name, flag.usage)
+        }
     }
 }
 
@@ -172,7 +192,7 @@ mod tests {
             let mut flag_set = FlagSet::default();
 
             let mut value = String::new();
-            flag_set.bind(test.expected_flag.0.to_string(), &mut value);
+            flag_set.bind(test.expected_flag.0.to_string(), &mut value, "");
 
             let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
             assert_eq!(test.expects_err, result.is_err());
@@ -195,9 +215,7 @@ mod tests {
             let mut flag_set = FlagSet::default();
 
             let mut value = 0;
-            flag_set.bind(test.expected_flag.0.to_string(), &mut value);
-            let mut x = String::new();
-            flag_set.bind("test".to_string(), &mut x);
+            flag_set.bind(test.expected_flag.0.to_string(), &mut value, "");
             let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
             assert_eq!(test.expects_err, result.is_err());
 
@@ -219,7 +237,7 @@ mod tests {
             let mut flag_set = FlagSet::default();
 
             let mut value = false;
-            flag_set.bind(test.expected_flag.0.to_string(), &mut value);
+            flag_set.bind(test.expected_flag.0.to_string(), &mut value, "");
 
             let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
             assert_eq!(test.expects_err, result.is_err());
@@ -247,9 +265,9 @@ mod tests {
             let mut flag_set = FlagSet::default();
 
             let mut value1 = false;
-            flag_set.bind(test.expected_flag1.0.to_string(), &mut value1);
+            flag_set.bind(test.expected_flag1.0.to_string(), &mut value1, "");
             let mut value2 = false;
-            flag_set.bind(test.expected_flag2.0.to_string(), &mut value2);
+            flag_set.bind(test.expected_flag2.0.to_string(), &mut value2, "");
 
             let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
 
