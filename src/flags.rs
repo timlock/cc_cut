@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
+use std::rc::Rc;
 use std::str;
 use std::str::FromStr;
 
@@ -63,13 +65,34 @@ impl From<FlagPrefix> for &str {
     }
 }
 
+enum BoundValue<'a> {
+    Ref(&'a mut dyn ParseFlag),
+    RefCell(Rc<RefCell<dyn ParseFlag>>),
+}
+
+impl<'a> BoundValue<'a> {
+    fn parse_from_string(&mut self, s: &str) -> Result<(), String> {
+        match self {
+            BoundValue::Ref(inner) => inner.parse_from_string(s),
+            BoundValue::RefCell(inner) => inner.borrow_mut().parse_from_string(s),
+        }
+    }
+
+    fn try_activate(&mut self) -> Result<(), String> {
+        match self {
+            BoundValue::Ref(inner) => inner.try_activate(),
+            BoundValue::RefCell(inner) => inner.borrow_mut().try_activate(),
+        }
+    }
+}
+
 struct Flag<'a> {
-    inner: &'a mut dyn ParseFlag,
+    inner: BoundValue<'a>,
     usage: &'static str,
 }
 
 impl<'a> Flag<'a> {
-    fn new(inner: &'a mut dyn ParseFlag, usage: &'static str) -> Self {
+    fn new(inner: BoundValue<'a>, usage: &'static str) -> Self {
         Self {
             inner,
             usage,
@@ -85,7 +108,12 @@ pub struct FlagSet<'a> {
 impl<'a> FlagSet<'a>
 {
     pub fn bind(&mut self, flag: String, value: &'a mut dyn ParseFlag, usage: &'static str) {
-        self.inner.insert(flag, Flag::new(value, usage));
+        self.inner.insert(flag, Flag::new(BoundValue::Ref(value), usage));
+    }
+    
+    pub fn bind_ref_cell(&mut self, flag: String, value: Rc<RefCell<dyn ParseFlag>>, usage: &'static str){
+        self.inner.insert(flag, Flag::new(BoundValue::RefCell(value), usage));
+
     }
 
     pub fn parse(&mut self, args: impl IntoIterator<Item=String>) -> Result<Vec<String>, String>
