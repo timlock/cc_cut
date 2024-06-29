@@ -1,54 +1,140 @@
 use std::collections::HashMap;
+use std::fmt::{Debug, Display};
 use std::str;
+use std::str::FromStr;
 
-pub struct FlagSet<'a, V> {
-    inner: HashMap<String, &'a mut V>,
+use crate::flags::FlagPrefix::{Long, Short};
+
+pub trait ParseFlag {
+    fn parse_from_string(&mut self, s: &str) -> Result<(), String>;
+    fn try_activate(&mut self) -> Result<(), String>;
 }
 
-impl<'a, V> Default for FlagSet<'a, V> {
-    fn default() -> Self {
-        Self {
-            inner: HashMap::new()
+
+impl<T> ParseFlag for T
+    where T: FromStr + Display, <T as FromStr>::Err: Debug {
+    fn parse_from_string(&mut self, s: &str) -> Result<(), String> {
+        match T::from_str(s) {
+            Ok(s) => {
+                *self = s;
+                Ok(())
+            }
+            Err(err) => {
+                Err(format!("{:?}", err))
+            }
+        }
+    }
+
+    fn try_activate(&mut self) -> Result<(), String> {
+        let t = self.to_string();
+        match t.as_str() {
+            "true" | "false" => self.parse_from_string("true"),
+            _ => Err(String::from("bound value should be of type bool"))
         }
     }
 }
 
-impl<'a, V> FlagSet<'a, V>
-    where
-        V: str::FromStr,
+
+enum FlagPrefix {
+    Short,
+    Long,
+}
+
+impl TryFrom<&str> for FlagPrefix {
+    type Error = ();
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value.starts_with("--") {
+            true => Ok(Long),
+            false => match value.starts_with('-') {
+                true => Ok(Short),
+                false => Err(())
+            },
+        }
+    }
+}
+
+impl From<FlagPrefix> for &str {
+    fn from(value: FlagPrefix) -> Self {
+        match value {
+            Short => "-",
+            Long => "--",
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct FlagSet<'a> {
+    inner: HashMap<String, &'a mut dyn ParseFlag>,
+}
+
+impl<'a> FlagSet<'a>
 {
-    pub fn bind(&mut self, flag: String, value: &'a mut V) {
+    pub fn bind(&mut self, flag: String, value: &'a mut dyn ParseFlag) {
         self.inner.insert(flag, value);
     }
 
     pub fn parse(&mut self, args: impl IntoIterator<Item=String>) -> Result<Vec<String>, String>
-        where
-            <V as std::str::FromStr>::Err: std::fmt::Debug,
     {
         let mut remaining = Vec::new();
         let mut flag = None;
 
         for arg in args {
-            if arg.starts_with('-') {
-                flag = arg.strip_prefix('-').map(|s| s.to_owned());
-            } else {
-                if let Some(key) = flag {
-                    if let Some(value) = self.inner.get_mut(&key) {
-                        let parsed = match V::from_str(&arg) {
-                            Ok(v) => v,
-                            Err(err) => {
-                                return Err(format!(
-                                    "Could not parse flag {key:?} value {arg}: {err:?}"
-                                ));
-                            }
-                        };
-                        **value = parsed;
+            let prefix = FlagPrefix::try_from(arg.as_str()).ok();
+            
+            if prefix.is_none() && flag.is_none(){
+                remaining.push(arg);
+                continue
+            } 
+            
+            match prefix {
+                Some(Long) => {
+                    let p: &'static str = Long.into();
+                    let name = arg.strip_prefix(p).unwrap();
+                    flag = Some(name.to_string());
+                    if let Some(f) = self.inner.get_mut(name) {
+                        if f.try_activate().is_ok() {
+                            flag = None;
+                        }
                     }
-                } else {
-                    remaining.push(arg);
                 }
-                flag = None;
-            }
+                Some(Short) => {
+                    let p: &'static str = Short.into();
+                    let name = arg.strip_prefix(p).unwrap();
+
+                    if name.len() == 1 {
+                        flag = Some(name.to_string());
+                        if let Some(f) = self.inner.get_mut(name) {
+                            if f.try_activate().is_ok() {
+                                flag = None;
+                            }
+                        }
+                    } else {
+                        for f in name.chars() {
+                            if let Some(f) = self.inner.get_mut(&f.to_string()) {
+                                if f.try_activate().is_ok() {
+                                    flag = None;
+                                }
+                            }
+                        }
+                    }
+                }
+                None => {
+                    match flag {
+                        Some(flag) => {
+                            if let Some(value) = self.inner.get_mut(&flag) {
+                                value
+                                    .parse_from_string(&arg)
+                                    .map_err(|err| format!("Could not parse flag {flag} err: {err}"))?;
+                            }
+                        }
+                        None => {
+                            remaining.push(arg);
+                        }
+                    };
+                    flag = None;
+                }
+            };
         }
 
         Ok(remaining)
@@ -99,7 +185,7 @@ mod tests {
     fn test_parse_i32() {
         let tests = vec![
             TestCase {
-                args: vec!["-i", "1"],
+                args: vec!["-i", "1", "-test", "text"],
                 expected_flag: ("i", 1),
                 expects_err: false,
             },
@@ -110,7 +196,8 @@ mod tests {
 
             let mut value = 0;
             flag_set.bind(test.expected_flag.0.to_string(), &mut value);
-
+            let mut x = String::new();
+            flag_set.bind("test".to_string(), &mut x);
             let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
             assert_eq!(test.expects_err, result.is_err());
 
