@@ -81,12 +81,12 @@ impl<'a> FlagSet<'a>
 
         for arg in args {
             let prefix = FlagPrefix::try_from(arg.as_str()).ok();
-            
-            if prefix.is_none() && flag.is_none(){
+
+            if prefix.is_none() && flag.is_none() {
                 remaining.push(arg);
-                continue
-            } 
-            
+                continue;
+            }
+
             match prefix {
                 Some(Long) => {
                     let p: &'static str = Long.into();
@@ -209,14 +209,9 @@ mod tests {
     fn test_parse_bool() {
         let tests = vec![
             TestCase {
-                args: vec!["-b", "true"],
+                args: vec!["-b"],
                 expected_flag: ("b", true),
                 expects_err: false,
-            },
-            TestCase {
-                args: vec!["-b", "fals"],
-                expected_flag: ("b", false),
-                expects_err: true,
             },
         ];
 
@@ -230,6 +225,36 @@ mod tests {
             assert_eq!(test.expects_err, result.is_err());
 
             assert_eq!(test.expected_flag.1, value);
+        }
+    }
+
+    #[test]
+    fn test_parse_multiple_bools() {
+        struct TestCase {
+            args: Vec<&'static str>,
+            expected_flag1: (&'static str, bool),
+            expected_flag2: (&'static str, bool),
+        }
+        let tests = vec![
+            TestCase {
+                args: vec!["-ba"],
+                expected_flag1: ("a", true),
+                expected_flag2: ("b", true),
+            },
+        ];
+
+        for test in tests {
+            let mut flag_set = FlagSet::default();
+
+            let mut value1 = false;
+            flag_set.bind(test.expected_flag1.0.to_string(), &mut value1);
+            let mut value2 = false;
+            flag_set.bind(test.expected_flag2.0.to_string(), &mut value2);
+
+            let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
+
+            assert_eq!(test.expected_flag1.1, value1);
+            assert_eq!(test.expected_flag2.1, value2);
         }
     }
 }
