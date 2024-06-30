@@ -1,27 +1,33 @@
-use std::collections::VecDeque;
 use std::env;
 use std::fs::File;
 use std::io;
 use std::io::BufRead;
 use std::process::ExitCode;
 
-use cccut::{Cutter, Parameter};
+use cccut::{Cutter, Mode};
+use cccut::flags::FlagSet;
 
 fn main() -> ExitCode {
+    let args = env::args().skip(1);
 
-    let mut args = env::args().skip(1).collect();
+    let mut fields = 0;
 
-    let parameters = match parse_parameters(&mut args) {
-        Ok(p) => p,
+    let mut flag_set = FlagSet::default();
+    flag_set.bind_mut_ref("fields", &mut fields, "");
+
+    let files = match flag_set.parse(args) {
+        Ok(files) => files,
         Err(err) => {
-            println!("{err}");
+            println!("Invalid arguments error: {err}");
             return ExitCode::FAILURE;
         }
     };
-    let cutter = Cutter::new(parameters);
+
+
+    let cutter = Cutter::new(Mode::Fields(vec![fields..(fields + 1)], '\t'));
     let mut readers: Vec<Box<dyn BufRead>> = Vec::new();
 
-    for filepath in args {
+    for filepath in files {
         match File::open(filepath.as_str()) {
             Ok(file) => readers.push(Box::new(io::BufReader::new(file))),
             Err(err) => {
@@ -43,20 +49,4 @@ fn main() -> ExitCode {
     }
 
     ExitCode::SUCCESS
-}
-
-fn parse_parameters(mut args: &mut VecDeque<String>) -> Result<Vec<Parameter>, String>{
-
-    let mut parameters = Vec::new();
-
-    while args.front().is_some() && args.front().as_ref().unwrap().starts_with("-"){
-        let parameter = args.pop_front().unwrap();
-
-        match Parameter::try_from(parameter.as_str()) {
-            Ok(param) => parameters.push(param),
-            Err(err) => { return Err(err); }
-        }
-    }
-
-    Ok(parameters)
 }

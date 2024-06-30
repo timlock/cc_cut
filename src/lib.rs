@@ -1,57 +1,83 @@
-use std::any::Any;
-use std::io::{BufRead, BufReader};
+use std::io::BufRead;
+use std::ops::Range;
 
 pub mod flags;
 
-pub enum Parameter {
-    Fields(usize)
+pub enum Mode {
+    Characters(Vec<Range<usize>>),
+    Bytes(Vec<Range<usize>>),
+    Fields(Vec<Range<usize>>, char),
 }
 
-impl TryFrom<&str> for Parameter {
-    type Error = String;
+impl Mode {
+    fn filter(&self, line: &str) -> String {
+        match self {
+            Mode::Characters(ranges) => {
+                let mut output = String::new();
+                let chars = line.chars().collect::<Vec<_>>();
 
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        if !value.starts_with('-') {
-            return Err(format!("Invalid parameter {value}: Parameter should start with '-'"));
-        }
-        return match value.split_at(2) {
-            ("-f", n) => {
-                let pos = match n.parse() {
-                    Ok(n) => n,
-                    Err(err) => { return Err(format!("Can not parse LIST: {err}")); }
-                };
-                Ok(Parameter::Fields(pos))
+                for range in ranges {
+                    let range = range.clone();
+
+                    if let Some(chars) = chars.get(range) {
+                        output += " ";
+                        let chars = chars.iter().collect::<String>();
+                        output += chars.as_str();
+                    }
+                }
+
+                output
             }
-            // ("-d", n) => {
-            //
-            // },
-            _ => Err(format!("Unknown parameter {value}"))
-        };
+            Mode::Bytes(ranges) => {
+                let mut output = String::new();
+                let bytes = line.bytes().collect::<Vec<_>>();
+
+                for range in ranges {
+                    let range = range.clone();
+
+                    if let Some(bytes) = bytes.get(range) {
+                        output += " ";
+                        let bytes = String::from_utf8_lossy(bytes);
+                        output += &bytes;
+                    }
+                }
+
+                output
+            }
+            Mode::Fields(ranges, delimiter) => {
+                let fields = line.split(*delimiter).collect::<Vec<_>>();
+
+                let mut output = String::new();
+                for range in ranges {
+                    let range = range.clone();
+
+                    for i in range {
+                        if let Some(field) = fields.get(i) {
+                            output += " ";
+                            output += field;
+                        }
+                    }
+                }
+                output
+            }
+        }
     }
 }
 
 pub struct Cutter {
-    fields: Option<usize>,
-    delimiter: String,
+    mode: Mode,
 }
 
 impl Cutter {
-    pub fn new(parameters: Vec<Parameter>) -> Self {
-        let mut separator = String::from("\t");
-        let mut fields = None;
-        for parameter in parameters {
-            match parameter {
-                Parameter::Fields(i) => fields = Some(i),
-            }
-        }
-        Self { delimiter: separator, fields }
+    pub fn new(mode: Mode) -> Self {
+        Self { mode }
     }
 
-    pub fn cut(&self, mut reader: impl BufRead) -> Vec<String> {
+    pub fn cut(&self, reader: impl BufRead) -> Vec<String> {
         let mut result = Vec::new();
         for line in reader.lines() {
-            let remainder = line.unwrap().split(&self.delimiter).skip(self.fields.unwrap() - 1).next().unwrap().to_string();
-            result.push(remainder);
+            let remaining = self.mode.filter(&line.unwrap());
+            result.push(remaining);
         }
         result
     }
