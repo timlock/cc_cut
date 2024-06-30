@@ -2,37 +2,47 @@ use std::env;
 use std::fs::File;
 use std::io;
 use std::io::BufRead;
-use std::process::ExitCode;
 
 use cccut::{Cutter, Mode};
 use cccut::flags::FlagSet;
 
-fn main() -> ExitCode {
+fn main() -> Result<(), String> {
     let args = env::args().skip(1);
+    let (cutter, files) = create_cutter(args)?;
+    run(cutter, files)
+}
+
+fn create_cutter(args: impl IntoIterator<Item=String>) -> Result<(Cutter, Vec<String>), String>
+{
+    let mut flag_set = FlagSet::default();
 
     let mut fields = 0;
-
-    let mut flag_set = FlagSet::default();
     flag_set.bind_mut_ref("fields", &mut fields, "");
+    
+    
+    let mut delemiter = '\t';
+    flag_set.bind_mut_ref("delimiter", &mut delemiter, "");
 
     let files = match flag_set.parse(args) {
         Ok(files) => files,
         Err(err) => {
-            println!("Invalid arguments error: {err}");
-            return ExitCode::FAILURE;
+            return Err(format!("Invalid arguments error: {err}"));
         }
     };
 
+    let cutter = Cutter::new(Mode::Fields(vec![fields..(fields + 1)], delemiter));
 
-    let cutter = Cutter::new(Mode::Fields(vec![fields..(fields + 1)], '\t'));
+    Ok((cutter, files))
+}
+
+fn run(cutter: Cutter, files: Vec<String>) -> Result<(), String> {
     let mut readers: Vec<Box<dyn BufRead>> = Vec::new();
 
     for filepath in files {
         match File::open(filepath.as_str()) {
             Ok(file) => readers.push(Box::new(io::BufReader::new(file))),
             Err(err) => {
-                println!("Can not open file {filepath}: {err}");
-                return ExitCode::FAILURE;
+                return Err(format!("Can not open file {filepath}: {err}"));
             }
         }
     }
@@ -47,6 +57,5 @@ fn main() -> ExitCode {
             println!("{line}");
         }
     }
-
-    ExitCode::SUCCESS
+    Ok(())
 }
