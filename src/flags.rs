@@ -13,8 +13,8 @@ pub trait ParseFlagValue {
 
 impl<T> ParseFlagValue for T
     where T: FromStr + Display, <T as FromStr>::Err: Debug {
-    fn parse_from_string(&mut self, s: &str) -> Result<(), String> {
-        match T::from_str(s) {
+    fn parse_from_string(&mut self, arg: &str) -> Result<(), String> {
+        match T::from_str(arg) {
             Ok(s) => {
                 *self = s;
                 Ok(())
@@ -35,9 +35,9 @@ impl<T> ParseFlagValue for T
 }
 
 
-enum FlagPrefix {
-    Short,
-    Long,
+enum FlagName<'a> {
+    Short(&'a str),
+    Long(&'a str),
 }
 
 impl TryFrom<&str> for FlagPrefix {
@@ -54,11 +54,16 @@ impl TryFrom<&str> for FlagPrefix {
     }
 }
 
-impl From<FlagPrefix> for &str {
-    fn from(value: FlagPrefix) -> Self {
-        match value {
-            FlagPrefix::Short => "-",
-            FlagPrefix::Long => "--",
+impl<'a> TryFrom<&'a str> for FlagName<'a> {
+    type Error = &'static str;
+
+    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
+        match value.strip_prefix("--") {
+            Some(name) => Ok(FlagName::Long(name)),
+            None => match value.strip_prefix('-') {
+                Some(name) => Ok(FlagName::Short(name)),
+                None => Err("value should have prefix '-' or \"--\" "),
+            }
         }
     }
 }
@@ -127,23 +132,18 @@ impl<'a> FlagSet<'a>
                 continue;
             }
 
-            let prefix = FlagPrefix::try_from(arg.as_str()).ok();
+            let prefix = FlagName::try_from(arg.as_str()).ok();
 
             match prefix {
-                Some(FlagPrefix::Long) => {
-                    let p: &'static str = FlagPrefix::Long.into();
-                    let name = arg.strip_prefix(p).unwrap();
-                    flag = Some(name.to_string());
-                    if let Some(f) = self.inner.get_mut(name) {
+                Some(FlagName::Long(name)) => {
+                    flag = Some(name[..1].to_string());
+                    if let Some(f) = self.inner.get_mut(&name[..1]) {
                         if f.inner.try_activate().is_ok() {
                             flag = None;
                         }
                     }
                 }
-                Some(FlagPrefix::Short) => {
-                    let p: &'static str = FlagPrefix::Short.into();
-                    let name = arg.strip_prefix(p).unwrap();
-
+                Some(FlagName::Short(name)) => {
                     if name.len() == 1 {
                         flag = Some(name.to_string());
                         if let Some(f) = self.inner.get_mut(name) {
@@ -299,6 +299,8 @@ mod tests {
             flag_set.bind_mut_ref(test.expected_flag2.0, &mut value2, "");
 
             let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
+
+            assert!(result.is_ok());
 
             assert_eq!(test.expected_flag1.1, value1);
             assert_eq!(test.expected_flag2.1, value2);
