@@ -9,9 +9,27 @@ pub enum Mode {
     Fields(Vec<Range<usize>>, char),
 }
 
-impl Mode {
+
+pub struct Cutter {
+    mode: Mode,
+}
+
+impl Cutter {
+    pub fn new(mode: Mode) -> Self {
+        Self { mode }
+    }
+
+    pub fn cut(&self, reader: impl BufRead) -> Vec<String> {
+        let mut result = Vec::new();
+        for line in reader.lines() {
+            let remaining = self.filter(&line.unwrap());
+            result.push(remaining);
+        }
+        result
+    }
+
     fn filter(&self, line: &str) -> String {
-        match self {
+        match &self.mode {
             Mode::Characters(ranges) => {
                 let mut output = String::new();
                 let chars = line.chars().collect::<Vec<_>>();
@@ -61,24 +79,5 @@ impl Mode {
                 output
             }
         }
-    }
-}
-
-pub struct Cutter {
-    mode: Mode,
-}
-
-impl Cutter {
-    pub fn new(mode: Mode) -> Self {
-        Self { mode }
-    }
-
-    pub fn cut(&self, reader: impl BufRead) -> Vec<String> {
-        let mut result = Vec::new();
-        for line in reader.lines() {
-            let remaining = self.mode.filter(&line.unwrap());
-            result.push(remaining);
-        }
-        result
     }
 }
