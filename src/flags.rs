@@ -4,14 +4,13 @@ use std::fmt::{Debug, Display};
 use std::rc::Rc;
 use std::str::FromStr;
 
-
-pub trait ParseFlagValue {
+pub trait Value {
     fn parse_from_string(&mut self, s: &str) -> Result<(), String>;
     fn try_activate(&mut self) -> Result<(), String>;
 }
 
 
-impl<T> ParseFlagValue for T
+impl<T> Value for T
     where T: FromStr + Display, <T as FromStr>::Err: Debug {
     fn parse_from_string(&mut self, arg: &str) -> Result<(), String> {
         match T::from_str(arg) {
@@ -35,42 +34,9 @@ impl<T> ParseFlagValue for T
 }
 
 
-enum FlagName<'a> {
-    Short(&'a str),
-    Long(&'a str),
-}
-
-impl TryFrom<&str> for FlagPrefix {
-    type Error = ();
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value.starts_with("--") {
-            true => Ok(FlagPrefix::Long),
-            false => match value.starts_with('-') {
-                true => Ok(FlagPrefix::Short),
-                false => Err(())
-            },
-        }
-    }
-}
-
-impl<'a> TryFrom<&'a str> for FlagName<'a> {
-    type Error = &'static str;
-
-    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
-        match value.strip_prefix("--") {
-            Some(name) => Ok(FlagName::Long(name)),
-            None => match value.strip_prefix('-') {
-                Some(name) => Ok(FlagName::Short(name)),
-                None => Err("value should have prefix '-' or \"--\" "),
-            }
-        }
-    }
-}
-
 enum ValueRef<'a> {
-    MutRef(&'a mut dyn ParseFlagValue),
-    RefCell(Rc<RefCell<dyn ParseFlagValue>>),
+    MutRef(&'a mut dyn Value),
+    RefCell(Rc<RefCell<dyn Value>>),
 }
 
 impl<'a> ValueRef<'a> {
@@ -105,6 +71,22 @@ impl<'a> Flag<'a> {
     }
 }
 
+fn parse_name(value: &str) -> Option<&str> {
+    match value.starts_with("--") {
+        true => Some(value.strip_prefix("--").unwrap()),
+        false => match value.starts_with('-') {
+            true => Some(value.strip_prefix('-').unwrap()),
+            false => None
+        },
+    }
+}
+
+#[derive(Debug)]
+pub enum FlagError {
+    UnknownFlag(String),
+    ParseError(String),
+}
+
 #[derive(Default)]
 pub struct FlagSet<'a> {
     inner: HashMap<&'a str, Flag<'a>>,
@@ -112,52 +94,85 @@ pub struct FlagSet<'a> {
 
 impl<'a> FlagSet<'a>
 {
-    pub fn bind_mut_ref(&mut self, flag: &'a str, value: &'a mut dyn ParseFlagValue, usage: &'a str) {
-        self.inner.insert(&flag[..1], Flag::new(flag, ValueRef::MutRef(value), usage));
+    pub fn bind_mut_ref(&mut self, flag: &'a str, allow_short: bool, value: &'a mut dyn Value, usage: &'a str) {
+        let key = if allow_short {
+            &flag[..1]
+        } else {
+            flag
+        };
+
+        let flag = Flag::new(flag, ValueRef::MutRef(value), usage);
+        if self.inner.insert(key, flag).is_some() {
+            panic!("should not register flag name {key} twice")
+        }
     }
 
-    pub fn bind_ref_cell(&mut self, flag: &'a str, value: Rc<RefCell<dyn ParseFlagValue>>, usage: &'a str) {
-        self.inner.insert(&flag[..1], Flag::new(flag, ValueRef::RefCell(value), usage));
+    pub fn bind_ref_cell(&mut self, flag: &'a str, allow_short: bool, value: Rc<RefCell<dyn Value>>, usage: &'a str) {
+        let key = if allow_short {
+            &flag[..1]
+        } else {
+            flag
+        };
+
+        let flag = Flag::new(flag, ValueRef::RefCell(value), usage);
+        if self.inner.insert(key, flag).is_some() {
+            panic!("should not register flag name {key} twice")
+        }
     }
 
-    pub fn parse(&mut self, args: impl IntoIterator<Item=String>) -> Result<Vec<String>, String>
+    fn has_flag(&self, name: &str) -> bool {
+        if self.inner.get(name).is_some() {
+            return true;
+        }
+
+        if let Some(flag) = self.inner.get(&name[..1]) {
+            return flag.name == name;
+        }
+
+        false
+    }
+
+    pub fn parse(&mut self, args: impl IntoIterator<Item=String>) -> Result<Vec<String>, FlagError>
     {
         let mut remaining = Vec::new();
         let mut flag = None;
         let mut all_flags_parsed = false;
 
         for arg in args {
+            if arg == "--" {
+                all_flags_parsed = true;
+            }
+
             if all_flags_parsed {
                 remaining.push(arg);
                 continue;
             }
 
-            let prefix = FlagName::try_from(arg.as_str()).ok();
+            let name = parse_name(arg.as_str());
 
-            match prefix {
-                Some(FlagName::Long(name)) => {
-                    flag = Some(name[..1].to_string());
-                    if let Some(f) = self.inner.get_mut(&name[..1]) {
-                        if f.inner.try_activate().is_ok() {
-                            flag = None;
-                        }
-                    }
-                }
-                Some(FlagName::Short(name)) => {
-                    if name.len() == 1 {
-                        flag = Some(name.to_string());
-                        if let Some(f) = self.inner.get_mut(name) {
-                            if f.inner.try_activate().is_ok() {
-                                flag = None;
-                            }
-                        }
-                    } else {
+            match name {
+                Some(name) => {
+                    if !self.has_flag(name) {
                         for f in name.chars() {
-                            if let Some(f) = self.inner.get_mut(f.to_string().as_str()) {
-                                if f.inner.try_activate().is_ok() {
+                            let short_name = f.to_string();
+
+                            if !self.has_flag(short_name.as_str()) {
+                                return Err(FlagError::UnknownFlag(name.to_string()));
+                            }
+
+                            if let Some(value) = self.inner.get_mut(short_name.as_str()) {
+                                if value.inner.try_activate().is_ok() {
                                     flag = None;
                                 }
                             }
+                        }
+                    }
+
+                    flag = Some(name.to_string());
+
+                    if let Some(value) = self.inner.get_mut(name) {
+                        if value.inner.try_activate().is_ok() {
+                            flag = None;
                         }
                     }
                 }
@@ -167,7 +182,7 @@ impl<'a> FlagSet<'a>
                             if let Some(value) = self.inner.get_mut(flag.as_str()) {
                                 value.inner
                                     .parse_from_string(&arg)
-                                    .map_err(|err| format!("Could not parse flag {flag} err: {err}"))?;
+                                    .map_err(|err| FlagError::ParseError(format!("Could not parse flag {flag} err: {err}")))?;
                             }
                         }
                         None => {
@@ -221,7 +236,7 @@ mod tests {
             let mut flag_set = FlagSet::default();
 
             let mut value = String::new();
-            flag_set.bind_mut_ref(test.expected_flag.0, &mut value, "");
+            flag_set.bind_mut_ref(test.expected_flag.0, false, &mut value, "");
 
             let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
             assert_eq!(test.expects_err, result.is_err());
@@ -234,7 +249,7 @@ mod tests {
     fn test_parse_i32() {
         let tests = vec![
             TestCase {
-                args: vec!["-i", "1", "-test", "text"],
+                args: vec!["-i", "1"],
                 expected_flag: ("i", 1),
                 expects_err: false,
             },
@@ -244,7 +259,7 @@ mod tests {
             let mut flag_set = FlagSet::default();
 
             let mut value = 0;
-            flag_set.bind_mut_ref(test.expected_flag.0, &mut value, "");
+            flag_set.bind_mut_ref(test.expected_flag.0, false, &mut value, "");
             let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
             assert_eq!(test.expects_err, result.is_err());
 
@@ -266,7 +281,7 @@ mod tests {
             let mut flag_set = FlagSet::default();
 
             let mut value = false;
-            flag_set.bind_mut_ref(test.expected_flag.0, &mut value, "");
+            flag_set.bind_mut_ref(test.expected_flag.0, false, &mut value, "");
 
             let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
             assert_eq!(test.expects_err, result.is_err());
@@ -294,9 +309,9 @@ mod tests {
             let mut flag_set = FlagSet::default();
 
             let mut value1 = false;
-            flag_set.bind_mut_ref(test.expected_flag1.0, &mut value1, "");
+            flag_set.bind_mut_ref(test.expected_flag1.0, false, &mut value1, "");
             let mut value2 = false;
-            flag_set.bind_mut_ref(test.expected_flag2.0, &mut value2, "");
+            flag_set.bind_mut_ref(test.expected_flag2.0, false, &mut value2, "");
 
             let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
 
@@ -311,7 +326,7 @@ mod tests {
     fn test_parse_ref_cell() {
         let tests = vec![
             TestCase {
-                args: vec!["-i", "1", "-test", "text"],
+                args: vec!["-i", "1"],
                 expected_flag: ("i", 1),
                 expects_err: false,
             },
@@ -321,7 +336,7 @@ mod tests {
             let mut flag_set = FlagSet::default();
 
             let value = Rc::new(RefCell::new(0));
-            flag_set.bind_ref_cell(test.expected_flag.0, value.clone(), "");
+            flag_set.bind_ref_cell(test.expected_flag.0, false, value.clone(), "");
             let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
             assert_eq!(test.expects_err, result.is_err());
 
@@ -357,7 +372,7 @@ mod tests {
                 let value = Rc::new(RefCell::new(String::new()));
                 actual.push(value.clone());
 
-                flag_set.bind_ref_cell(*name, value.clone(), "");
+                flag_set.bind_ref_cell(*name, false, value.clone(), "");
             }
 
             let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
@@ -400,7 +415,7 @@ mod tests {
                 let value = Rc::new(RefCell::new(false));
                 actual.push(value.clone());
 
-                flag_set.bind_ref_cell(*name, value.clone(), "");
+                flag_set.bind_ref_cell(*name, false, value.clone(), "");
             }
 
             let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
