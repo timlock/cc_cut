@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
 use std::str::FromStr;
 
@@ -84,7 +84,20 @@ fn parse_name(value: &str) -> Option<&str> {
 #[derive(Debug)]
 pub enum FlagError {
     UnknownFlag(String),
-    ParseError(String),
+    ParseError((String, String)),
+}
+
+impl Display for FlagError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FlagError::UnknownFlag(name) => {
+                write!(f, "unknown flag: {name}")
+            }
+            FlagError::ParseError((name, err)) => {
+                write!(f, "could not parse flag {name} err: {err}")
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -135,7 +148,7 @@ impl<'a> FlagSet<'a>
     pub fn parse(&mut self, args: impl IntoIterator<Item=String>) -> Result<Vec<String>, FlagError>
     {
         let mut remaining = Vec::new();
-        let mut flag = None;
+        let mut flag: Option<String> = None;
         let mut all_flags_parsed = false;
 
         for arg in args {
@@ -148,51 +161,50 @@ impl<'a> FlagSet<'a>
                 continue;
             }
 
-            let name = parse_name(arg.as_str());
-
-            match name {
+            match flag {
                 Some(name) => {
-                    if !self.has_flag(name) {
-                        for f in name.chars() {
-                            let short_name = f.to_string();
+                    if let Some(value) = self.inner.get_mut(name.as_str()) {
+                        value.inner
+                            .parse_from_string(&arg)
+                            .map_err(|err| FlagError::ParseError((name, err)))?;
+                    }
+                    flag = None;
+                }
+                None => {
+                    let name = parse_name(arg.as_str());
+                    match name {
+                        Some(name) => {
+                            if !self.has_flag(name) {
+                                for f in name.chars() {
+                                    let short_name = f.to_string();
 
-                            if !self.has_flag(short_name.as_str()) {
-                                return Err(FlagError::UnknownFlag(name.to_string()));
+                                    if !self.has_flag(short_name.as_str()) {
+                                        return Err(FlagError::UnknownFlag(name.to_string()));
+                                    }
+
+                                    if let Some(value) = self.inner.get_mut(short_name.as_str()) {
+                                        if value.inner.try_activate().is_ok() {
+                                            flag = None;
+                                        }
+                                    }
+                                }
                             }
 
-                            if let Some(value) = self.inner.get_mut(short_name.as_str()) {
+                            flag = Some(name.to_string());
+
+                            if let Some(value) = self.inner.get_mut(name) {
                                 if value.inner.try_activate().is_ok() {
                                     flag = None;
                                 }
-                            }
-                        }
-                    }
-
-                    flag = Some(name.to_string());
-
-                    if let Some(value) = self.inner.get_mut(name) {
-                        if value.inner.try_activate().is_ok() {
-                            flag = None;
-                        }
-                    }
-                }
-                None => {
-                    match flag {
-                        Some(flag) => {
-                            if let Some(value) = self.inner.get_mut(flag.as_str()) {
-                                value.inner
-                                    .parse_from_string(&arg)
-                                    .map_err(|err| FlagError::ParseError(format!("Could not parse flag {flag} err: {err}")))?;
                             }
                         }
                         None => {
                             all_flags_parsed = true;
                             remaining.push(arg);
                         }
-                    };
-                    flag = None;
+                    }
                 }
-            };
+            }
         }
 
         Ok(remaining)

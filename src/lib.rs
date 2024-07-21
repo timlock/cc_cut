@@ -1,15 +1,15 @@
 use std::fmt::Display;
-use std::io::BufRead;
+use std::io::{BufRead, Chain};
 use std::ops::Range;
 use std::str::FromStr;
-use crate::flags::ParseFlagValue;
+use crate::flags::Value;
 
 pub mod flags;
 
 pub enum Mode {
     Characters(Vec<Range<usize>>),
     Bytes(Vec<Range<usize>>),
-    Fields(Vec<Range<usize>>, char),
+    Fields(ArgList<usize>, char),
 }
 
 
@@ -67,18 +67,14 @@ impl Cutter {
 
                 output
             }
-            Mode::Fields(ranges, delimiter) => {
+            Mode::Fields(arg_list, delimiter) => {
                 let fields = line.split(*delimiter).collect::<Vec<_>>();
 
                 let mut output = String::new();
-                for range in ranges {
-                    let range = range.clone();
-
-                    for i in range {
-                        if let Some(field) = fields.get(i) {
-                            output += " ";
-                            output += field;
-                        }
+                for i in arg_list.inner.iter() {
+                    if let Some(field) = fields.get(*i - 1) {
+                        output += " ";
+                        output += field;
                     }
                 }
                 output
@@ -87,12 +83,14 @@ impl Cutter {
     }
 }
 
+
 #[derive(Default)]
-struct List<T> {
-    inner: Vec<T>,
+pub struct ArgList<T> {
+    pub inner: Vec<T>,
 }
 
-impl<T> ParseFlagValue for List<T>
+
+impl<T> Value for ArgList<T>
     where T: FromStr, <T as FromStr>::Err: Display {
     fn parse_from_string(&mut self, arg: &str) -> Result<(), String> {
         let arg = arg.strip_prefix('\"').unwrap_or(arg);
@@ -135,7 +133,7 @@ mod tests {
             },
         ];
         for test in tests {
-            let mut actual = List::default();
+            let mut actual = ArgList::default();
 
             let result = actual.parse_from_string(test.args);
             assert!(result.is_ok());
