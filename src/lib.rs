@@ -1,5 +1,5 @@
 use std::fmt::Display;
-use std::io::{BufRead, Chain};
+use std::io::{BufRead, Chain, Read};
 use std::ops::Range;
 use std::str::FromStr;
 use crate::flags::Value;
@@ -9,7 +9,7 @@ pub mod flags;
 pub enum Mode {
     Characters(Vec<Range<usize>>),
     Bytes(Vec<Range<usize>>),
-    Fields(ArgList<usize>, char),
+    Fields(Vec<usize>, char),
 }
 
 
@@ -71,7 +71,7 @@ impl Cutter {
                 let fields = line.split(*delimiter).collect::<Vec<_>>();
 
                 let mut output = String::new();
-                for i in arg_list.inner.iter() {
+                for i in arg_list.iter() {
                     if let Some(field) = fields.get(*i - 1) {
                         output += " ";
                         output += field;
@@ -84,61 +84,26 @@ impl Cutter {
 }
 
 
-#[derive(Default)]
-pub struct ArgList<T> {
-    pub inner: Vec<T>,
-}
 
-
-impl<T> Value for ArgList<T>
-    where T: FromStr, <T as FromStr>::Err: Display {
-    fn parse_from_string(&mut self, arg: &str) -> Result<(), String> {
-        let arg = arg.strip_prefix('\"').unwrap_or(arg);
-        let arg = arg.strip_suffix('\"').unwrap_or(arg);
-
-        let separator = if arg.contains(',') { ',' } else { ' ' };
-
-        for i in arg.split(separator) {
-            match i.parse() {
-                Ok(i) => self.inner.push(i),
-                Err(err) => return Err(err.to_string())
-            }
-        }
-        Ok(())
-    }
-
-    fn try_activate(&mut self) -> Result<(), String> {
-        Err(String::from("bound value should be of type bool"))
-    }
-}
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+    use std::io::BufReader;
+    use std::path::Path;
     use super::*;
 
     #[test]
-    fn test_parse_list() {
-        struct TestCase {
-            args: &'static str,
-            expected: Vec<i32>,
-        }
-        let tests = vec![
-            TestCase {
-                args: "1,2,3",
-                expected: vec![1, 2, 3],
-            },
-            TestCase {
-                args: "\"1 2 3\"",
-                expected: vec![1, 2, 3],
-            },
-        ];
-        for test in tests {
-            let mut actual = ArgList::default();
+    fn test_field() -> Result<(), String> {
+        let field = vec![2];
+        let cutter = Cutter::new(Mode::Fields(field, '\t'));
+        let path = Path::new("src").join("testdata").join("sample.tsv");
+        let file = File::open(path).map_err(|err| err.to_string())?;
+        let bufReader = BufReader::new(file);
 
-            let result = actual.parse_from_string(test.args);
-            assert!(result.is_ok());
-
-            assert_eq!(test.expected, actual.inner);
-        }
+        let expected = vec!["f1", "1", "6", "11", "16", "21"];
+        let actual = cutter.cut(bufReader);
+        assert_eq!(expected, actual);
+        Ok(())
     }
 }
