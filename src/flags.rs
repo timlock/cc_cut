@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
 use std::str::FromStr;
@@ -9,18 +10,18 @@ pub trait Value {
     fn try_activate(&mut self) -> Result<(), String>;
 }
 
-
 impl<T> Value for T
-    where T: FromStr + Display, <T as FromStr>::Err: Debug {
+where
+    T: FromStr + Display,
+    <T as FromStr>::Err: Error,
+{
     fn parse_from_string(&mut self, arg: &str) -> Result<(), String> {
         match T::from_str(arg) {
             Ok(s) => {
                 *self = s;
                 Ok(())
             }
-            Err(err) => {
-                Err(format!("{:?}", err))
-            }
+            Err(err) => Err(format!("{:?}", err)),
         }
     }
 
@@ -28,11 +29,10 @@ impl<T> Value for T
         let t = self.to_string();
         match t.as_str() {
             "true" | "false" => self.parse_from_string("true"),
-            _ => Err(String::from("bound value should be of type bool"))
+            _ => Err(String::from("bound value should be of type bool")),
         }
     }
 }
-
 
 enum ValueRef<'a> {
     MutRef(&'a mut dyn Value),
@@ -56,18 +56,14 @@ impl<'a> ValueRef<'a> {
 }
 
 struct Flag<'a> {
-    name: &'a str,
+    name: &'static str,
+    usage: &'static str,
     inner: ValueRef<'a>,
-    usage: &'a str,
 }
 
 impl<'a> Flag<'a> {
-    fn new(name: &'a str, inner: ValueRef<'a>, usage: &'a str) -> Self {
-        Self {
-            name,
-            inner,
-            usage,
-        }
+    fn new(name: &'static str, inner: ValueRef<'a>, usage: &'static str) -> Self {
+        Self { name, inner, usage }
     }
 }
 
@@ -76,7 +72,7 @@ fn parse_name(value: &str) -> Option<&str> {
         true => Some(value.strip_prefix("--").unwrap()),
         false => match value.starts_with('-') {
             true => Some(value.strip_prefix('-').unwrap()),
-            false => None
+            false => None,
         },
     }
 }
@@ -102,17 +98,18 @@ impl Display for FlagError {
 
 #[derive(Default)]
 pub struct FlagSet<'a> {
-    inner: HashMap<&'a str, Flag<'a>>,
+    inner: HashMap<&'static str, Flag<'a>>,
 }
 
-impl<'a> FlagSet<'a>
-{
-    pub fn bind_mut_ref(&mut self, flag: &'a str, allow_short: bool, value: &'a mut dyn Value, usage: &'a str) {
-        let key = if allow_short {
-            &flag[..1]
-        } else {
-            flag
-        };
+impl<'a> FlagSet<'a> {
+    pub fn bind_mut_ref(
+        &mut self,
+        flag: &'static str,
+        allow_short: bool,
+        value: &'a mut dyn Value,
+        usage: &'static str,
+    ) {
+        let key = if allow_short { &flag[..1] } else { flag };
 
         let flag = Flag::new(flag, ValueRef::MutRef(value), usage);
         if self.inner.insert(key, flag).is_some() {
@@ -120,12 +117,14 @@ impl<'a> FlagSet<'a>
         }
     }
 
-    pub fn bind_ref_cell(&mut self, flag: &'a str, allow_short: bool, value: Rc<RefCell<dyn Value>>, usage: &'a str) {
-        let key = if allow_short {
-            &flag[..1]
-        } else {
-            flag
-        };
+    pub fn bind_ref_cell(
+        &mut self,
+        flag: &'static str,
+        allow_short: bool,
+        value: Rc<RefCell<dyn Value>>,
+        usage: &'static str,
+    ) {
+        let key = if allow_short { &flag[..1] } else { flag };
 
         let flag = Flag::new(flag, ValueRef::RefCell(value), usage);
         if self.inner.insert(key, flag).is_some() {
@@ -145,8 +144,10 @@ impl<'a> FlagSet<'a>
         false
     }
 
-    pub fn parse(&mut self, args: impl IntoIterator<Item=String>) -> Result<Vec<String>, FlagError>
-    {
+    pub fn parse(
+        &mut self,
+        args: impl IntoIterator<Item = String>,
+    ) -> Result<Vec<String>, FlagError> {
         let mut remaining = Vec::new();
         let mut flag: Option<String> = None;
         let mut all_flags_parsed = false;
@@ -164,7 +165,8 @@ impl<'a> FlagSet<'a>
             match flag {
                 Some(name) => {
                     if let Some(value) = self.inner.get_mut(name.as_str()) {
-                        value.inner
+                        value
+                            .inner
                             .parse_from_string(&arg)
                             .map_err(|err| FlagError::ParseError((name, err)))?;
                     }
@@ -221,229 +223,154 @@ impl<'a> FlagSet<'a>
 mod tests {
     use super::*;
 
-    struct TestCase<V>
-        where V: FromStr
-    {
-        args: Vec<&'static str>,
-        expected_flag: (&'static str, V),
-        expects_err: bool,
-    }
-
     #[test]
     fn test_parse_string() {
-        let tests = vec![
-            TestCase {
-                args: vec!["-b", "string"],
-                expected_flag: ("b", String::from("string")),
-                expects_err: false,
-            },
-            TestCase {
-                args: vec!["-b", ""],
-                expected_flag: ("b", String::new()),
-                expects_err: false,
-            },
-        ];
+        let args = vec!["-b", "string"];
+        let expected_flag = ("b", String::from("string"));
+        let expects_err = false;
 
-        for test in tests {
-            let mut flag_set = FlagSet::default();
+        let mut flag_set = FlagSet::default();
 
-            let mut value = String::new();
-            flag_set.bind_mut_ref(test.expected_flag.0, false, &mut value, "");
+        let mut value = String::new();
+        flag_set.bind_mut_ref(expected_flag.0, false, &mut value, "");
 
-            let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
-            assert_eq!(test.expects_err, result.is_err());
+        let result = flag_set.parse(args.iter().map(|a| a.to_string()));
+        assert_eq!(expects_err, result.is_err());
 
-            assert_eq!(test.expected_flag.1, value);
-        }
+        assert_eq!(expected_flag.1, value);
     }
 
     #[test]
     fn test_parse_i32() {
-        let tests = vec![
-            TestCase {
-                args: vec!["-i", "1"],
-                expected_flag: ("i", 1),
-                expects_err: false,
-            },
-        ];
+        let args = vec!["-i", "1"];
+        let expected_flag = ("i", 1);
+        let expects_err = false;
 
-        for test in tests {
-            let mut flag_set = FlagSet::default();
+        let mut flag_set = FlagSet::default();
 
-            let mut value = 0;
-            flag_set.bind_mut_ref(test.expected_flag.0, false, &mut value, "");
-            let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
-            assert_eq!(test.expects_err, result.is_err());
+        let mut value = 0;
+        flag_set.bind_mut_ref(expected_flag.0, false, &mut value, "");
+        let result = flag_set.parse(args.iter().map(|a| a.to_string()));
+        assert_eq!(expects_err, result.is_err());
 
-            assert_eq!(test.expected_flag.1, value);
-        }
+        assert_eq!(expected_flag.1, value);
     }
 
     #[test]
     fn test_parse_bool() {
-        let tests = vec![
-            TestCase {
-                args: vec!["-b"],
-                expected_flag: ("b", true),
-                expects_err: false,
-            },
-        ];
+        let args = vec!["-b"];
+        let expected_flag = ("b", true);
+        let expects_err = false;
 
-        for test in tests {
-            let mut flag_set = FlagSet::default();
+        let mut flag_set = FlagSet::default();
 
-            let mut value = false;
-            flag_set.bind_mut_ref(test.expected_flag.0, false, &mut value, "");
+        let mut value = false;
+        flag_set.bind_mut_ref(expected_flag.0, false, &mut value, "");
 
-            let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
-            assert_eq!(test.expects_err, result.is_err());
+        let result = flag_set.parse(args.iter().map(|a| a.to_string()));
+        assert_eq!(expects_err, result.is_err());
 
-            assert_eq!(test.expected_flag.1, value);
-        }
+        assert_eq!(expected_flag.1, value);
     }
 
     #[test]
     fn test_parse_multiple_bools() {
-        struct TestCase {
-            args: Vec<&'static str>,
-            expected_flag1: (&'static str, bool),
-            expected_flag2: (&'static str, bool),
-        }
-        let tests = vec![
-            TestCase {
-                args: vec!["-ba"],
-                expected_flag1: ("a", true),
-                expected_flag2: ("b", true),
-            },
-        ];
+        let args = vec!["-ba"];
+        let expected_flag1 = ("a", true);
+        let expected_flag2 = ("b", true);
 
-        for test in tests {
-            let mut flag_set = FlagSet::default();
+        let mut flag_set = FlagSet::default();
 
-            let mut value1 = false;
-            flag_set.bind_mut_ref(test.expected_flag1.0, false, &mut value1, "");
-            let mut value2 = false;
-            flag_set.bind_mut_ref(test.expected_flag2.0, false, &mut value2, "");
+        let mut value1 = false;
+        flag_set.bind_mut_ref(expected_flag1.0, false, &mut value1, "");
+        let mut value2 = false;
+        flag_set.bind_mut_ref(expected_flag2.0, false, &mut value2, "");
 
-            let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
+        let result = flag_set.parse(args.iter().map(|a| a.to_string()));
 
-            assert!(result.is_ok());
+        assert!(result.is_ok());
 
-            assert_eq!(test.expected_flag1.1, value1);
-            assert_eq!(test.expected_flag2.1, value2);
-        }
+        assert_eq!(expected_flag1.1, value1);
+        assert_eq!(expected_flag2.1, value2);
     }
 
     #[test]
     fn test_parse_ref_cell() {
-        let tests = vec![
-            TestCase {
-                args: vec!["-i", "1"],
-                expected_flag: ("i", 1),
-                expects_err: false,
-            },
-        ];
+        let args = vec!["-i", "1"];
+        let expected_flag = ("i", 1);
+        let expects_err = false;
 
-        for test in tests {
-            let mut flag_set = FlagSet::default();
+        let mut flag_set = FlagSet::default();
 
-            let value = Rc::new(RefCell::new(0));
-            flag_set.bind_ref_cell(test.expected_flag.0, false, value.clone(), "");
-            let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
-            assert_eq!(test.expects_err, result.is_err());
+        let value = Rc::new(RefCell::new(0));
+        flag_set.bind_ref_cell(expected_flag.0, false, value.clone(), "");
+        let result = flag_set.parse(args.iter().map(|a| a.to_string()));
+        assert_eq!(expects_err, result.is_err());
 
-            assert_eq!(test.expected_flag.1, *value.borrow());
-        }
+        assert_eq!(expected_flag.1, *value.borrow());
     }
 
     #[test]
     fn test_parse_remaining() {
-        struct TestCase {
-            args: Vec<&'static str>,
-            expected_flags: Vec<(&'static str, String)>,
-            remaining: Vec<&'static str>,
+        let args = vec!["--test", "text", "first", "second", "third"];
+        let expected_flags = vec![("test", String::from("text"))];
+        let remaining = vec!["first", "second", "third"];
+
+        let mut flag_set = FlagSet::default();
+
+        let mut actual = Vec::new();
+        for (name, _) in &expected_flags {
+            let value = Rc::new(RefCell::new(String::new()));
+            actual.push(value.clone());
+
+            flag_set.bind_ref_cell(*name, false, value.clone(), "");
         }
-        let tests = vec![
-            TestCase {
-                args: vec!["--test", "text", "remaining"],
-                expected_flags: vec![("test", String::from("text"))],
-                remaining: vec!["remaining"],
-            },
-            TestCase {
-                args: vec!["--test", "text", "first", "second", "third"],
-                expected_flags: vec![("test", String::from("text"))],
-                remaining: vec!["first", "second", "third"],
-            },
-        ];
 
-        for test in tests {
-            let mut flag_set = FlagSet::default();
+        let result = flag_set.parse(args.iter().map(|a| a.to_string()));
 
-            let mut actual = Vec::new();
-            for (name, _) in &test.expected_flags {
-                let value = Rc::new(RefCell::new(String::new()));
-                actual.push(value.clone());
+        assert_eq!(expected_flags.len(), actual.len());
+        for i in 0..actual.len() {
+            assert_eq!(expected_flags[i].1, *actual[i].borrow())
+        }
 
-                flag_set.bind_ref_cell(*name, false, value.clone(), "");
-            }
+        assert!(result.is_ok());
+        let result = result.unwrap();
 
-            let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
-
-            assert_eq!(test.expected_flags.len(), actual.len());
-            for i in 0..actual.len() {
-                assert_eq!(test.expected_flags[i].1, *actual[i].borrow())
-            }
-
-            assert!(result.is_ok());
-            let result = result.unwrap();
-
-            assert_eq!(test.remaining.len(), result.len());
-            for i in 0..result.len() {
-                assert_eq!(test.remaining[i], result[i]);
-            }
+        assert_eq!(remaining.len(), result.len());
+        for i in 0..result.len() {
+            assert_eq!(remaining[i], result[i]);
         }
     }
 
     #[test]
     fn test_parse_remaining_with_bool_flag() {
-        struct TestCase {
-            args: Vec<&'static str>,
-            expected_flags: Vec<(&'static str, bool)>,
-            remaining: Vec<&'static str>,
+        let args = vec!["--test", "first", "second", "third"];
+        let expected_flags = vec![("test", true)];
+        let remaining = vec!["first", "second", "third"];
+
+        let mut flag_set = FlagSet::default();
+
+        let mut actual = Vec::new();
+        for (name, _) in &expected_flags {
+            let value = Rc::new(RefCell::new(false));
+            actual.push(value.clone());
+
+            flag_set.bind_ref_cell(*name, false, value.clone(), "");
         }
-        let tests = vec![
-            TestCase {
-                args: vec!["--test", "first", "second", "third"],
-                expected_flags: vec![("test", true)],
-                remaining: vec!["first", "second", "third"],
-            },
-        ];
 
-        for test in tests {
-            let mut flag_set = FlagSet::default();
+        let result = flag_set.parse(args.iter().map(|a| a.to_string()));
 
-            let mut actual = Vec::new();
-            for (name, _) in &test.expected_flags {
-                let value = Rc::new(RefCell::new(false));
-                actual.push(value.clone());
+        assert_eq!(expected_flags.len(), actual.len());
+        for i in 0..actual.len() {
+            assert_eq!(expected_flags[i].1, *actual[i].borrow())
+        }
 
-                flag_set.bind_ref_cell(*name, false, value.clone(), "");
-            }
+        assert!(result.is_ok());
+        let result = result.unwrap();
 
-            let result = flag_set.parse(test.args.iter().map(|a| a.to_string()));
-
-            assert_eq!(test.expected_flags.len(), actual.len());
-            for i in 0..actual.len() {
-                assert_eq!(test.expected_flags[i].1, *actual[i].borrow())
-            }
-
-            assert!(result.is_ok());
-            let result = result.unwrap();
-
-            assert_eq!(test.remaining.len(), result.len());
-            for i in 0..result.len() {
-                assert_eq!(test.remaining[i], result[i]);
-            }
+        assert_eq!(remaining.len(), result.len());
+        for i in 0..result.len() {
+            assert_eq!(remaining[i], result[i]);
         }
     }
 }
