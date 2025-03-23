@@ -58,12 +58,16 @@ impl<'a> ValueRef<'a> {
 struct Flag<'a> {
     name: &'static str,
     usage: &'static str,
-    inner: ValueRef<'a>,
+    value: &'a mut dyn Value,
 }
 
 impl<'a> Flag<'a> {
-    fn new(name: &'static str, inner: ValueRef<'a>, usage: &'static str) -> Self {
-        Self { name, inner, usage }
+    fn new(value: &'a mut dyn Value, name: &'static str, usage: &'static str) -> Self {
+        Self {
+            value,
+            name,
+            usage,
+        }
     }
 }
 
@@ -81,6 +85,7 @@ fn parse_name(value: &str) -> Option<&str> {
 pub enum FlagError {
     UnknownFlag(String),
     ParseError((String, String)),
+    NoValue(String),
 }
 
 impl Display for FlagError {
@@ -92,6 +97,9 @@ impl Display for FlagError {
             FlagError::ParseError((name, err)) => {
                 write!(f, "could not parse flag {name} err: {err}")
             }
+            FlagError::NoValue(name) => {
+                write!(f, "expected value for flag {name}")
+            }
         }
     }
 }
@@ -99,117 +107,79 @@ impl Display for FlagError {
 #[derive(Default)]
 pub struct FlagSet<'a> {
     inner: HashMap<&'static str, Flag<'a>>,
+    bound: HashMap<String, Flag<'a>>,
+    args: Vec<String>,
 }
 
 impl<'a> FlagSet<'a> {
-    pub fn bind_mut_ref(
-        &mut self,
-        flag: &'static str,
-        allow_short: bool,
-        value: &'a mut dyn Value,
-        usage: &'static str,
-    ) {
-        let key = if allow_short { &flag[..1] } else { flag };
-
-        let flag = Flag::new(flag, ValueRef::MutRef(value), usage);
-        if self.inner.insert(key, flag).is_some() {
-            panic!("should not register flag name {key} twice")
+    pub fn bind(&mut self, value: &'a mut dyn Value, name: &'static str, usage: &'static str) {
+        let flag = Flag::new(value, name, usage);
+        if self.bound.insert(name.to_ascii_lowercase(), flag).is_some() {
+            panic!("should not register flag name {name} twice")
         }
     }
 
-    pub fn bind_ref_cell(
-        &mut self,
-        flag: &'static str,
-        allow_short: bool,
-        value: Rc<RefCell<dyn Value>>,
-        usage: &'static str,
-    ) {
-        let key = if allow_short { &flag[..1] } else { flag };
+    pub fn parse(&mut self, args: impl IntoIterator<Item = String>) -> Result<(), FlagError> {
+        let mut iter = args.into_iter();
 
-        let flag = Flag::new(flag, ValueRef::RefCell(value), usage);
-        if self.inner.insert(key, flag).is_some() {
-            panic!("should not register flag name {key} twice")
-        }
-    }
+        loop {
+            let name = match iter.next() {
+                Some(f) => f,
+                None => break,
+            };
 
-    fn has_flag(&self, name: &str) -> bool {
-        if self.inner.get(name).is_some() {
-            return true;
-        }
-
-        if let Some(flag) = self.inner.get(&name[..1]) {
-            return flag.name == name;
-        }
-
-        false
-    }
-
-    pub fn parse(
-        &mut self,
-        args: impl IntoIterator<Item = String>,
-    ) -> Result<Vec<String>, FlagError> {
-        let mut remaining = Vec::new();
-        let mut flag: Option<String> = None;
-        let mut all_flags_parsed = false;
-
-        for arg in args {
-            if arg == "--" {
-                all_flags_parsed = true;
+            if !name.starts_with('-') {
+                self.args.push(name);
+                self.args.extend(iter);
+                return Ok(());
             }
 
-            if all_flags_parsed {
-                remaining.push(arg);
-                continue;
+            if name == "--" {
+                self.args.extend(iter);
+                return Ok(());
             }
 
-            match flag {
-                Some(name) => {
-                    if let Some(value) = self.inner.get_mut(name.as_str()) {
-                        value
-                            .inner
-                            .parse_from_string(&arg)
-                            .map_err(|err| FlagError::ParseError((name, err)))?;
-                    }
-                    flag = None;
+            let stripped = match name.strip_prefix("-"){
+                Some(single) => single.strip_prefix("-").unwrap_or_else(|| single),
+                None => panic!("At this point the name should start with a hyphen")
+            };
+
+            if let Some(equals_pos) = stripped.find("=") {
+                let (flag_name, flag_value) = stripped.split_at(equals_pos);
+
+                let flag = self
+                    .bound
+                    .get_mut(flag_name)
+                    .ok_or(FlagError::UnknownFlag(stripped.to_owned()))?;
+                
+
+                flag.value
+                    .parse_from_string(flag_value)
+                    .map_err(|err| FlagError::ParseError((stripped.to_owned(), err)))?;
+
+                self.bound.remove(stripped);
+                
+            } else {
+                let mut flag = self
+                    .bound
+                    .get_mut(stripped)
+                    .ok_or(FlagError::UnknownFlag(stripped.to_owned()))?;
+                if let Err(_) = flag.value.try_activate() {
+                    let value = match iter.next() {
+                        Some(v) => v,
+                        None => return Err(FlagError::NoValue(stripped.to_owned())),
+                    };
+
+                    flag.value
+                        .parse_from_string(value.as_str())
+                        .map_err(|err| FlagError::ParseError((stripped.to_owned(), err)))?;
                 }
-                None => {
-                    let name = parse_name(arg.as_str());
-                    match name {
-                        Some(name) => {
-                            if !self.has_flag(name) {
-                                for f in name.chars() {
-                                    let short_name = f.to_string();
-
-                                    if !self.has_flag(short_name.as_str()) {
-                                        return Err(FlagError::UnknownFlag(name.to_string()));
-                                    }
-
-                                    if let Some(value) = self.inner.get_mut(short_name.as_str()) {
-                                        if value.inner.try_activate().is_ok() {
-                                            flag = None;
-                                        }
-                                    }
-                                }
-                            }
-
-                            flag = Some(name.to_string());
-
-                            if let Some(value) = self.inner.get_mut(name) {
-                                if value.inner.try_activate().is_ok() {
-                                    flag = None;
-                                }
-                            }
-                        }
-                        None => {
-                            all_flags_parsed = true;
-                            remaining.push(arg);
-                        }
-                    }
-                }
+                
+                self.bound.remove(stripped);
             }
+            
         }
-
-        Ok(remaining)
+        Ok(())
     }
 
     pub fn print_usage(&self) {
@@ -232,7 +202,7 @@ mod tests {
         let mut flag_set = FlagSet::default();
 
         let mut value = String::new();
-        flag_set.bind_mut_ref(expected_flag.0, false, &mut value, "");
+        flag_set.bind(&mut value, "b","");
 
         let result = flag_set.parse(args.iter().map(|a| a.to_string()));
         assert_eq!(expects_err, result.is_err());
@@ -249,7 +219,7 @@ mod tests {
         let mut flag_set = FlagSet::default();
 
         let mut value = 0;
-        flag_set.bind_mut_ref(expected_flag.0, false, &mut value, "");
+        flag_set.bind(&mut value, "i", "");
         let result = flag_set.parse(args.iter().map(|a| a.to_string()));
         assert_eq!(expects_err, result.is_err());
 
@@ -265,7 +235,7 @@ mod tests {
         let mut flag_set = FlagSet::default();
 
         let mut value = false;
-        flag_set.bind_mut_ref(expected_flag.0, false, &mut value, "");
+        flag_set.bind(&mut value, "b", "");
 
         let result = flag_set.parse(args.iter().map(|a| a.to_string()));
         assert_eq!(expects_err, result.is_err());
@@ -282,9 +252,9 @@ mod tests {
         let mut flag_set = FlagSet::default();
 
         let mut value1 = false;
-        flag_set.bind_mut_ref(expected_flag1.0, false, &mut value1, "");
+        flag_set.bind(&mut value1, "a","");
         let mut value2 = false;
-        flag_set.bind_mut_ref(expected_flag2.0, false, &mut value2, "");
+        flag_set.bind(&mut value2, "b","");
 
         let result = flag_set.parse(args.iter().map(|a| a.to_string()));
 
@@ -294,21 +264,6 @@ mod tests {
         assert_eq!(expected_flag2.1, value2);
     }
 
-    #[test]
-    fn test_parse_ref_cell() {
-        let args = vec!["-i", "1"];
-        let expected_flag = ("i", 1);
-        let expects_err = false;
-
-        let mut flag_set = FlagSet::default();
-
-        let value = Rc::new(RefCell::new(0));
-        flag_set.bind_ref_cell(expected_flag.0, false, value.clone(), "");
-        let result = flag_set.parse(args.iter().map(|a| a.to_string()));
-        assert_eq!(expects_err, result.is_err());
-
-        assert_eq!(expected_flag.1, *value.borrow());
-    }
 
     #[test]
     fn test_parse_remaining() {
@@ -318,27 +273,20 @@ mod tests {
 
         let mut flag_set = FlagSet::default();
 
-        let mut actual = Vec::new();
-        for (name, _) in &expected_flags {
-            let value = Rc::new(RefCell::new(String::new()));
-            actual.push(value.clone());
-
-            flag_set.bind_ref_cell(*name, false, value.clone(), "");
-        }
+        let mut value = String::new();
+        flag_set.bind(&mut value, "test", "");
 
         let result = flag_set.parse(args.iter().map(|a| a.to_string()));
+        let args = flag_set.args;
 
-        assert_eq!(expected_flags.len(), actual.len());
-        for i in 0..actual.len() {
-            assert_eq!(expected_flags[i].1, *actual[i].borrow())
-        }
+        assert_eq!("text", value.as_str());
 
         assert!(result.is_ok());
         let result = result.unwrap();
 
-        assert_eq!(remaining.len(), result.len());
-        for i in 0..result.len() {
-            assert_eq!(remaining[i], result[i]);
+        assert_eq!(remaining.len(), args.len());
+        for i in 0..args.len() {
+            assert_eq!(remaining[i], args[i]);
         }
     }
 
@@ -350,27 +298,20 @@ mod tests {
 
         let mut flag_set = FlagSet::default();
 
-        let mut actual = Vec::new();
-        for (name, _) in &expected_flags {
-            let value = Rc::new(RefCell::new(false));
-            actual.push(value.clone());
-
-            flag_set.bind_ref_cell(*name, false, value.clone(), "");
-        }
+        let mut value = false;
+        flag_set.bind(&mut value, "test", "");
 
         let result = flag_set.parse(args.iter().map(|a| a.to_string()));
+        let args = flag_set.args;
 
-        assert_eq!(expected_flags.len(), actual.len());
-        for i in 0..actual.len() {
-            assert_eq!(expected_flags[i].1, *actual[i].borrow())
-        }
+        assert!(value);
 
         assert!(result.is_ok());
         let result = result.unwrap();
 
-        assert_eq!(remaining.len(), result.len());
-        for i in 0..result.len() {
-            assert_eq!(remaining[i], result[i]);
+        assert_eq!(remaining.len(), args.len());
+        for i in 0..args.len() {
+            assert_eq!(remaining[i], args[i]);
         }
     }
 }
