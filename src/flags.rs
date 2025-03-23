@@ -1,8 +1,6 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
-use std::rc::Rc;
 use std::str::FromStr;
 
 pub trait Value {
@@ -34,26 +32,6 @@ where
     }
 }
 
-enum ValueRef<'a> {
-    MutRef(&'a mut dyn Value),
-    RefCell(Rc<RefCell<dyn Value>>),
-}
-
-impl<'a> ValueRef<'a> {
-    fn parse_from_string(&mut self, s: &str) -> Result<(), String> {
-        match self {
-            ValueRef::MutRef(inner) => inner.parse_from_string(s),
-            ValueRef::RefCell(inner) => inner.borrow_mut().parse_from_string(s),
-        }
-    }
-
-    fn try_activate(&mut self) -> Result<(), String> {
-        match self {
-            ValueRef::MutRef(inner) => inner.try_activate(),
-            ValueRef::RefCell(inner) => inner.borrow_mut().try_activate(),
-        }
-    }
-}
 
 struct Flag<'a> {
     name: &'static str,
